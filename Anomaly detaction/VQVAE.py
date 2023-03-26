@@ -84,7 +84,7 @@ class VQVAE(Model):
             epoch_loss = 0
             for i, (x, _) in enumerate(dataloader):
                 with tf.GradientTape() as tape:
-                    
+
                     x_recon, z_e, z_q, indices, vq_loss = self(x)
                     recon_loss = tf.reduce_mean(tf.keras.losses.MSE(x_recon, x))
                     loss = recon_loss + vq_loss
