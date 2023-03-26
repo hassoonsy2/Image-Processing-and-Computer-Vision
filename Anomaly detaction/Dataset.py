@@ -10,7 +10,7 @@ class UnhealthyXRayDataset(tf.keras.utils.Sequence):
         self.image_folder = image_folder
         self.image_paths = [os.path.join(self.image_folder, file) for file in os.listdir(self.image_folder) if
                             file.endswith(('.jpeg', '.jpg', '.png'))]
-        self.labels = [0] * len(self.image_paths)
+        self.labels = [1] * len(self.image_paths)  # Change label to 1 for unhealthy images
         self.resize_shape = resize_shape
 
     def __len__(self):
@@ -32,10 +32,12 @@ class UnhealthyXRayDataset(tf.keras.utils.Sequence):
         for image_path, label in zip(self.image_paths, self.labels):
             yield self.preprocess_image(image_path, label)
 
-class NormalDataset:
+
+class NormalDataset(tf.keras.utils.Sequence):
     def __init__(self, image_folder, resize_shape=(256, 256)):
         self.image_folder = image_folder
-        self.image_paths = [os.path.join(self.image_folder, file) for file in os.listdir(self.image_folder) if file.endswith(('.jpeg', '.jpg', '.png'))]
+        self.image_paths = [os.path.join(self.image_folder, file) for file in os.listdir(self.image_folder) if
+                            file.endswith(('.jpeg', '.jpg', '.png'))]
         self.labels = [0] * len(self.image_paths)
         self.resize_shape = resize_shape
 

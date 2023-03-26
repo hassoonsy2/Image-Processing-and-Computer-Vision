@@ -2,7 +2,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
 
-
 class AnomalyDetector:
     def __init__(self, vqvae_model, threshold):
         self.vqvae_model = vqvae_model
@@ -42,3 +41,4 @@ class AnomalyDetector:
             ax.axis('off')
 
         plt.show()
+

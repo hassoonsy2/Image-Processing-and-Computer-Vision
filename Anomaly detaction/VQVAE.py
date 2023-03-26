@@ -1,5 +1,5 @@
 import tensorflow as tf
-from matplotlib import pyplot as plt
+import matplotlib.pyplot as plt
 from tensorflow.keras import layers, Model
 
 class ResidualBlock(layers.Layer):
@@ -40,18 +40,20 @@ class VectorQuantizer(layers.Layer):
         indices = tf.argmin(distances, axis=1)
         z_q = tf.gather(self.embeddings, indices)
         z_q = tf.reshape(z_q, tf.shape(z_e))
+        z_q_with_gradient = z_q + tf.stop_gradient(z_e - z_q)
 
         e_latent_loss = tf.reduce_mean((tf.stop_gradient(z_q) - z_e) ** 2)
-        q_latent_loss = tf.reduce_mean((z_q - tf.stop_gradient(z_e)) ** 2)
+        q_latent_loss = tf.reduce_mean((z_q_with_gradient - tf.stop_gradient(z_e)) ** 2)
         loss = q_latent_loss + self.commitment_cost * e_latent_loss
 
-        return tf.transpose(z_q, perm=[0, 2, 3, 1]), indices, loss
+        return tf.transpose(z_q_with_gradient, perm=[0, 2, 3, 1]), indices, loss
 
 class VQVAE(Model):
     def __init__(self, in_channels, num_embeddings, embedding_dim, commitment_cost):
         super(VQVAE, self).__init__()
         self.encoder = tf.keras.Sequential([
-            layers.Conv2D(64, kernel_size=4, strides=2, padding='same', activation='relu', input_shape=(None, None, in_channels)),
+            layers.Conv2D(32, kernel_size=4, strides=2, padding='same', activation='relu', input_shape=(None, None, in_channels)),
+            layers.Conv2D(64, kernel_size=4, strides=2, padding='same', activation='relu'),
             layers.Conv2D(128, kernel_size=4, strides=2, padding='same', activation='relu'),
             ResidualBlock(128, 128),
             ResidualBlock(128, 128),
@@ -61,6 +63,7 @@ class VQVAE(Model):
             ResidualBlock(128, 128),
             ResidualBlock(128, 128),
             layers.Conv2DTranspose(64, kernel_size=4, strides=2, padding='same', activation='relu'),
+            layers.Conv2DTranspose(32, kernel_size=4, strides=2, padding='same', activation='relu'),
             layers.Conv2DTranspose(in_channels, kernel_size=4, strides=2, padding='same', activation='sigmoid'),
         ])
 
@@ -70,8 +73,15 @@ class VQVAE(Model):
         x_recon = self.decoder(z_q)
         return x_recon, z_e, z_q, indices, loss
 
-    def train_vqvae(self, dataloader, num_epochs, learning_rate, dataset_size, batch_size, print_every=1):
-        self.compile(optimizer=tf.keras.optimizers.Adam(learning_rate), loss=tf.keras.losses.MSE)
+    def train_vqvae(self, dataloader, num_epochs, initial_learning_rate, dataset_size, batch_size, print_every=1):
+        lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+            initial_learning_rate,
+            decay_steps=dataset_size // batch_size,
+            decay_rate=0.9,
+            staircase=True)
+        optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule)
+
+        self.compile(optimizer=optimizer, loss=tf.keras.losses.MSE)
         training_losses = []
 
         steps_per_epoch = dataset_size // batch_size
@@ -84,7 +94,6 @@ class VQVAE(Model):
             epoch_loss = 0
             for i, (x, _) in enumerate(dataloader):
                 with tf.GradientTape() as tape:
-
                     x_recon, z_e, z_q, indices, vq_loss = self(x)
                     recon_loss = tf.reduce_mean(tf.keras.losses.MSE(x_recon, x))
                     loss = recon_loss + vq_loss
