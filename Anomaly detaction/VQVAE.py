@@ -1,100 +1,121 @@
 import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+from matplotlib import pyplot as plt
+from tensorflow.keras import layers, Model
 
-#ToDo : Implement Insaption Block !
-#ToDo : Make documentaion
+class ResidualBlock(layers.Layer):
+    def __init__(self, in_channels, out_channels):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = layers.Conv2D(out_channels, kernel_size=3, padding='same')
+        self.bn1 = layers.BatchNormalization()
+        self.relu1 = layers.ReLU()
+        self.conv2 = layers.Conv2D(out_channels, kernel_size=3, padding='same')
+        self.bn2 = layers.BatchNormalization()
+        self.relu2 = layers.ReLU()
 
-class VQVAE(keras.Model):
-    def __init__(self, d, n_channels, code_size, n_block=3, n_res_block=4, cond_channels=None, dropout_p=.5,
-                 reconstruction_loss=keras.losses.MeanAbsoluteError()):
-        super().__init__()
-        self.code_size = code_size
-        self.d = d
-        self.cond_channels = cond_channels
-        self.reconstruction_loss = reconstruction_loss
+    def call(self, inputs):
+        residual = inputs
+        x = self.conv1(inputs)
+        x = self.bn1(x)
+        x = self.relu1(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x += residual
+        x = self.relu2(x)
+        return x
 
-        if isinstance(n_channels, int):
-            n_channels = [n_channels] * (n_block + 1)
-        else:
-            n_block = len(n_channels) - 1
+class VectorQuantizer(layers.Layer):
+    def __init__(self, num_embeddings, embedding_dim, commitment_cost):
+        super(VectorQuantizer, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.num_embeddings = num_embeddings
+        self.commitment_cost = commitment_cost
+        initial_embeddings = tf.random.uniform((num_embeddings, embedding_dim), minval=-1/num_embeddings, maxval=1/num_embeddings)
+        self.embeddings = tf.Variable(initial_embeddings, trainable=True)
 
-        # Encoder
-        down = [layers.Conv2D(n_channels[0], kernel_size=7, padding='same'),
-                layers.BatchNormalization()]
+    def call(self, z_e):
+        z_e = tf.transpose(z_e, perm=[0, 3, 1, 2])
+        z_e_flat = tf.reshape(z_e, [-1, self.embedding_dim])
+        distances = tf.norm(tf.expand_dims(z_e_flat, axis=1) - self.embeddings, axis=-1)
 
-        for block in range(n_block):
-            for res_block in range(n_res_block):
-                down.append(nn_blocks.GatedResNet(n_channels[block], 3, dropout_p=dropout_p, conv=layers.Conv2D,
-                                                  norm=layers.BatchNormalization))
+        indices = tf.argmin(distances, axis=1)
+        z_q = tf.gather(self.embeddings, indices)
+        z_q = tf.reshape(z_q, tf.shape(z_e))
 
-            down.extend([layers.Conv2D(n_channels[block + 1], kernel_size=5, strides=2, padding='same'),
-                         layers.BatchNormalization()])
+        e_latent_loss = tf.reduce_mean((tf.stop_gradient(z_q) - z_e) ** 2)
+        q_latent_loss = tf.reduce_mean((z_q - tf.stop_gradient(z_e)) ** 2)
+        loss = q_latent_loss + self.commitment_cost * e_latent_loss
 
-        down.append(nn_blocks.GatedResNet(n_channels[-1], 3, dropout_p=dropout_p, conv=layers.Conv2D,
-                                          norm=layers.BatchNormalization()))
+        return tf.transpose(z_q, perm=[0, 2, 3, 1]), indices, loss
 
-        self.Q = keras.Sequential(down)
+class VQVAE(Model):
+    def __init__(self, in_channels, num_embeddings, embedding_dim, commitment_cost):
+        super(VQVAE, self).__init__()
+        self.encoder = tf.keras.Sequential([
+            layers.Conv2D(64, kernel_size=4, strides=2, padding='same', activation='relu', input_shape=(None, None, in_channels)),
+            layers.Conv2D(128, kernel_size=4, strides=2, padding='same', activation='relu'),
+            ResidualBlock(128, 128),
+            ResidualBlock(128, 128),
+        ])
+        self.vq = VectorQuantizer(num_embeddings, embedding_dim, commitment_cost)
+        self.decoder = tf.keras.Sequential([
+            ResidualBlock(128, 128),
+            ResidualBlock(128, 128),
+            layers.Conv2DTranspose(64, kernel_size=4, strides=2, padding='same', activation='relu'),
+            layers.Conv2DTranspose(in_channels, kernel_size=4, strides=2, padding='same', activation='sigmoid'),
+        ])
 
-        self.codebook = nn_blocks.Quantize(code_size, n_channels[-1])
+    def call(self, inputs):
+        z_e = self.encoder(inputs)
+        z_q, indices, loss = self.vq(z_e)
+        x_recon = self.decoder(z_q)
+        return x_recon, z_e, z_q, indices, loss
 
-        # Decoder
-        up = [layers.Conv2D(n_channels[-1], kernel_size=3, padding='same'),
-              layers.BatchNormalization()]
-        for block in range(n_block):
-            for res_block in range(n_res_block):
-                up.append(nn_blocks.GatedResNet(n_channels[-(block + 1)], 3, dropout_p=dropout_p,
-                                                conv=layers.Conv2D, norm=layers.BatchNormalization))
+    def train_vqvae(self, dataloader, num_epochs, learning_rate, dataset_size, batch_size, print_every=1):
+        self.compile(optimizer=tf.keras.optimizers.Adam(learning_rate), loss=tf.keras.losses.MSE)
+        training_losses = []
 
-            up.extend([layers.Conv2DTranspose(n_channels[-(block + 2)], kernel_size=6, strides=2, padding='same'),
-                       layers.BatchNormalization()])
+        steps_per_epoch = dataset_size // batch_size
 
-        up.append(nn_blocks.GatedResNet(n_channels[0], 3, dropout_p=dropout_p, conv=layers.Conv2D,
-                                        norm=layers.BatchNormalization()))
+        # Set up the matplotlib interactive mode
+        plt.ion()
+        fig, ax = plt.subplots()
 
-        up.extend([layers.ELU(),
-                   layers.Conv2DTranspose(d, kernel_size=1, padding='same')])
-        self.P = keras.Sequential(up)
+        for epoch in range(num_epochs):
+            epoch_loss = 0
+            for i, (x, _) in enumerate(dataloader):
+                with tf.GradientTape() as tape:
+                    
+                    x_recon, z_e, z_q, indices, vq_loss = self(x)
+                    recon_loss = tf.reduce_mean(tf.keras.losses.MSE(x_recon, x))
+                    loss = recon_loss + vq_loss
 
-    def encode(self, x, cond=None):
-        out = tf.expand_dims(x, axis=1)
+                gradients = tape.gradient(loss, self.trainable_variables)
+                self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+                epoch_loss += loss.numpy()
 
-        if self.cond_channels is not None:
-            cond = tf.cast(cond, dtype=tf.float32)
-            if len(cond.shape) == 2:
-                cond = tf.reshape(cond, [cond.shape[0], -1, 1, 1])
-                cond = tf.broadcast_to(cond, [-1, -1, x.shape[1], x.shape[2]])
-            out = tf.concat([out, cond], 1)
+            avg_epoch_loss = epoch_loss / steps_per_epoch
+            training_losses.append(avg_epoch_loss)
 
-        return self.Q(out)
+            if (epoch + 1) % print_every == 0:
+                print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_epoch_loss:.6f}")
 
-    def decode(self, latents, cond=None):
-        if self.cond_channels is not None:
-            cond = tf.cast(cond, dtype=tf.float32)
-            if len(cond.shape) == 2:
-                cond = tf.reshape(cond, [cond.shape[0], -1, 1, 1])
-                cond = tf.broadcast_to(cond, [-1, -1, latents.shape[2], latents.shape[3]])
-            tf.concat([latents, cond], axis=-1)
-            return latents
+            # Update the learning curve after every epoch
+            ax.clear()
+            ax.plot(range(1, epoch + 2), training_losses)
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Training Loss")
+            ax.set_title("Training Loss Curve")
+            plt.draw()
+            plt.pause(0.1)
 
-    def forward(self, x, cond=None):
-        z = self.encode(x, cond)
-        e, e_st, _ = self.codebook(z)
-        x_tilde = self.decode(e_st, cond)
+        # Turn off the interactive mode
+        plt.ioff()
 
-        diff1 = tf.reduce_mean(tf.square(z - tf.stop_gradient(e)))
-        diff2 = tf.reduce_mean(tf.square(e - tf.stop_gradient(z)))
-        return x_tilde, diff1 + diff2
+        return training_losses
 
-    def loss(self, x, cond=None, reduction='mean'):
-        x_tilde, diff = self.forward(x, cond)
-        x = tf.expand_dims(x, axis=1)
-        recon_loss = self.reconstruction_loss(x_tilde, x, reduction=reduction)
+    def save_model(self, path):
+        self.save_weights(path)
 
-        if reduction == 'mean':
-            loss = recon_loss + diff
+    def load_model(self, path):
+        self.load_weights(path)
 
-        elif reduction == 'none':
-            loss = tf.reduce_mean(recon_loss) + diff
-
-        return {'loss': loss, 'recon_loss': recon_loss, 'reg_loss': diff}
