@@ -92,6 +92,7 @@ class VQVAE(Model):
 
         for epoch in range(num_epochs):
             epoch_loss = 0
+            epoch_recon_loss = 0
             for i, (x, _) in enumerate(dataloader):
                 with tf.GradientTape() as tape:
                     x_recon, z_e, z_q, indices, vq_loss = self(x)
@@ -101,12 +102,16 @@ class VQVAE(Model):
                 gradients = tape.gradient(loss, self.trainable_variables)
                 self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
                 epoch_loss += loss.numpy()
+                epoch_recon_loss += recon_loss.numpy()
 
             avg_epoch_loss = epoch_loss / steps_per_epoch
+            avg_epoch_recon_loss = epoch_recon_loss / steps_per_epoch
             training_losses.append(avg_epoch_loss)
 
+            epoch_psnr = psnr(avg_epoch_recon_loss)
+
             if (epoch + 1) % print_every == 0:
-                print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_epoch_loss:.6f}")
+                print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_epoch_loss:.6f}, PSNR: {epoch_psnr:.4f}")
 
             # Update the learning curve after every epoch
             ax.clear()
@@ -127,4 +132,3 @@ class VQVAE(Model):
 
     def load_model(self, path):
         self.load_weights(path)
-

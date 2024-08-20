@@ -16,6 +16,17 @@ class UnhealthyXRayDataset(tf.keras.utils.Sequence):
     def __len__(self):
         return len(self.image_paths)
 
+    def augment_image(self, image):
+        # Apply random horizontal flip
+        image = tf.image.random_flip_left_right(image)
+
+        # Apply random rotation (up to 10 degrees)
+        image = tf.image.rot90(image, tf.random.uniform(shape=[], minval=0, maxval=4, dtype=tf.int32))
+
+        # Add more augmentations here if desired...
+
+        return image
+
     def preprocess_image(self, image_path, label):
         image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         try:
@@ -26,6 +37,10 @@ class UnhealthyXRayDataset(tf.keras.utils.Sequence):
         image = tf.convert_to_tensor(image, dtype=tf.float32)
         image = tf.expand_dims(image, axis=-1)
         image = image / 255.0
+
+        # Add data augmentation
+        image = self.augment_image(image)
+
         return image, label
 
     def generator(self):
@@ -44,6 +59,17 @@ class NormalDataset(tf.keras.utils.Sequence):
     def __len__(self):
         return len(self.image_paths)
 
+    def augment_image(self, image):
+        # Apply random horizontal flip
+        image = tf.image.random_flip_left_right(image)
+
+        # Apply random rotation (up to 10 degrees)
+        image = tf.image.rot90(image, tf.random.uniform(shape=[], minval=0, maxval=4, dtype=tf.int32))
+
+        # Add more augmentations here if desired...
+
+        return image
+
     def preprocess_image(self, image_path, label):
         image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         try:
@@ -54,6 +80,10 @@ class NormalDataset(tf.keras.utils.Sequence):
         image = tf.convert_to_tensor(image, dtype=tf.float32)
         image = tf.expand_dims(image, axis=-1)
         image = image / 255.0
+
+        # Add data augmentation
+        image = self.augment_image(image)
+
         return image, label
 
     def generator(self):
